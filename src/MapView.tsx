@@ -2,6 +2,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet.heat';
 import { useEffect, useRef } from 'react';
+import heartPinUrl from './icons/hotspot-heart-pin.svg';
 import type { Video } from './types';
 import { ACCENT } from './VideoCard';
 
@@ -13,6 +14,15 @@ const LONDON_BOUNDS = L.latLngBounds([51.28, -0.489], [51.686, 0.236]);
 const PICK_RADIUS_PX = 42;
 const PICK_RADIUS_MIN_M = 100; // ≈ the geocode jitter, so a tight click still catches a cluster
 const PICK_RADIUS_MAX_M = 2500;
+
+// Saved-post marker: the source SVG is 64×80 with the pin tip at (32, 76),
+// so the anchor sits at that point scaled to the rendered size.
+const HEART_PIN = L.icon({
+  iconUrl: heartPinUrl,
+  iconSize: [32, 40],
+  iconAnchor: [16, 38],
+  popupAnchor: [0, -36],
+});
 
 export interface MapViewProps {
   videos: Video[]; // only rows with coordinates
@@ -86,9 +96,7 @@ export default function MapView({ videos, savedIds, onSelect }: MapViewProps) {
     const pins = L.layerGroup();
     for (const v of videos) {
       if (!savedIds[v.id]) continue;
-      const marker = L.marker([v.latitude!, v.longitude!], {
-        icon: L.divIcon({ className: 'hs-pin', html: '♥', iconSize: [28, 28], iconAnchor: [14, 14] }),
-      });
+      const marker = L.marker([v.latitude!, v.longitude!], { icon: HEART_PIN });
       // Build the popup as DOM nodes — titles come from external platforms.
       const popup = document.createElement('div');
       const title = document.createElement('div');

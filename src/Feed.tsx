@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import AuthModal from './AuthModal';
 import { signOut, useAuth } from './lib/auth';
 import { addSave, fetchSavedIds, removeSave } from './lib/saves';
@@ -49,6 +49,53 @@ function tagToTerm(tag: string): string {
     .replace(/^#/, '')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .toLowerCase();
+}
+
+// Masonry: same responsive column count as the old auto-fill grid, but real
+// column divs so each column can be nudged down a little — breaks the flat
+// row alignment without touching card markup or order (round-robin keeps
+// left-to-right reading order).
+const COL_MIN = 200;
+const GAP_X = 18;
+const GAP_Y = 26;
+const STAGGER = [0, 30, 12, 40]; // px offset per column, repeating
+
+function MasonryGrid({ items }: { items: ReactNode[] }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [cols, setCols] = useState(4);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      setCols(Math.max(1, Math.floor((el.clientWidth + GAP_X) / (COL_MIN + GAP_X))));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const buckets: ReactNode[][] = Array.from({ length: cols }, () => []);
+  items.forEach((item, i) => buckets[i % cols].push(item));
+
+  return (
+    <div ref={ref} style={{ display: 'flex', gap: `${GAP_X}px`, alignItems: 'flex-start' }}>
+      {buckets.map((bucket, ci) => (
+        <div
+          key={ci}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: `${GAP_Y}px`,
+            marginTop: `${STAGGER[ci % STAGGER.length]}px`,
+          }}
+        >
+          {bucket}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 const S: Record<string, Style> = {
@@ -157,12 +204,6 @@ const S: Record<string, Style> = {
     cursor: 'pointer',
   },
   chipsRow: { display: 'flex', flexWrap: 'wrap', gap: '9px', margin: '0 0 22px' },
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-    gap: '26px 18px',
-    alignItems: 'start',
-  },
   skThumb: {
     borderRadius: '18px',
     aspectRatio: '9 / 16',
@@ -531,28 +572,31 @@ export default function Feed() {
                   <h2 style={S.h2}>
                     {pickShown.length} reel{pickShown.length === 1 ? '' : 's'} in this spot
                   </h2>
-                  <div style={S.grid}>
-                    {pickShown.map((v) => (
+                  <MasonryGrid
+                    items={pickShown.map((v) => (
                       <VideoCard key={v.id} video={v} hearted={!!saved[v.id]} onToggleHeart={toggleHeart} />
                     ))}
-                  </div>
+                  />
                 </>
               )}
             </div>
           </>
         ) : (
-          <div style={S.grid}>
-            {loading &&
-              Array.from({ length: 10 }, (_, i) => (
-                <div key={i}>
-                  <div style={S.skThumb} />
-                  <div style={S.skBar} />
-                </div>
-              ))}
-            {shown.map((v) => (
-              <VideoCard key={v.id} video={v} hearted={!!saved[v.id]} onToggleHeart={toggleHeart} />
-            ))}
-          </div>
+          <MasonryGrid
+            items={[
+              ...(loading
+                ? Array.from({ length: 10 }, (_, i) => (
+                    <div key={`sk-${i}`}>
+                      <div style={S.skThumb} />
+                      <div style={S.skBar} />
+                    </div>
+                  ))
+                : []),
+              ...shown.map((v) => (
+                <VideoCard key={v.id} video={v} hearted={!!saved[v.id]} onToggleHeart={toggleHeart} />
+              )),
+            ]}
+          />
         )}
       </main>
 
