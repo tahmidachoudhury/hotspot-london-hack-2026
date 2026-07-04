@@ -3,6 +3,7 @@ import AuthModal from './AuthModal';
 import { signOut, useAuth } from './lib/auth';
 import { addSave, fetchSavedIds, removeSave } from './lib/saves';
 import { fetchAllVideos, searchVideos, searchWords } from './lib/videos';
+import MapView from './MapView';
 import { pal } from './palette';
 import SearchBar, { type TrendingItem } from './SearchBar';
 import type { Category, Video } from './types';
@@ -11,7 +12,7 @@ import VideoCard, { ACCENT } from './VideoCard';
 const p = pal('Paper');
 
 type Style = CSSProperties & Record<string, unknown>;
-type Screen = 'feed' | 'results' | 'saved';
+type Screen = 'feed' | 'results' | 'saved' | 'map';
 
 // Static until a trending_searches table exists — terms curated to hit the seeded rows.
 const TRENDING: TrendingItem[] = [
@@ -82,6 +83,20 @@ const S: Record<string, Style> = {
     font: "600 13px 'Archivo',sans-serif",
   },
   savedHeart: { color: ACCENT, fontSize: '14px' },
+  mapBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '7px',
+    height: '40px',
+    padding: '0 16px',
+    borderRadius: '999px',
+    cursor: 'pointer',
+    border: 'none',
+    background: `linear-gradient(150deg,${ACCENT}, #7b4be0)`,
+    color: '#fff',
+    font: "600 13px 'Archivo',sans-serif",
+    letterSpacing: '.2px',
+  },
   savedCount: {
     minWidth: '19px',
     height: '19px',
@@ -170,6 +185,8 @@ const S: Record<string, Style> = {
   stateTitle: { font: "600 24px 'Oswald',sans-serif", color: p.ink },
   stateText: { font: "400 14px 'Archivo',sans-serif", color: p.mut, maxWidth: '360px' },
   stateBtn: { marginTop: '14px', padding: '12px 22px', borderRadius: '999px', border: 'none', cursor: 'pointer', background: ACCENT, color: '#fff', font: "600 13.5px 'Archivo',sans-serif" },
+  h2: { font: "600 24px 'Oswald',sans-serif", letterSpacing: '.2px', color: p.ink, margin: '2px 0 16px' },
+  mapHint: { font: "400 14px 'Archivo',sans-serif", color: p.mut, textAlign: 'center', padding: '22px' },
 };
 
 export default function Feed() {
@@ -185,6 +202,7 @@ export default function Feed() {
   const [saved, setSaved] = useState<Record<string, boolean>>({});
   const [authOpen, setAuthOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mapPick, setMapPick] = useState<Video[] | null>(null);
   const { user } = useAuth();
   const searchSeq = useRef(0);
 
@@ -240,6 +258,14 @@ export default function Feed() {
     window.scrollTo({ top: 0 });
   }, [user]);
 
+  const goMap = useCallback(() => {
+    searchSeq.current++;
+    setScreen('map');
+    setFilter(null);
+    setMapPick(null);
+    window.scrollTo({ top: 0 });
+  }, []);
+
   // Load this user's saves whenever the session changes; clear them on sign-out.
   useEffect(() => {
     if (!user) {
@@ -286,11 +312,25 @@ export default function Feed() {
 
   const isResults = screen === 'results';
   const isSaved = screen === 'saved';
+  const isMap = screen === 'map';
   const source = isResults ? results : isSaved ? videos && videos.filter((v) => saved[v.id]) : videos;
   const error = isResults ? resultsError : feedError;
   const loading = source === null && !error;
   const shown = source?.filter((v) => !filter || v.category === filter) ?? [];
   const savedCount = Object.keys(saved).length;
+
+  const geoVideos = useMemo(
+    () => (videos ?? []).filter((v) => v.latitude != null && v.longitude != null && (!filter || v.category === filter)),
+    [videos, filter],
+  );
+  const pickShown = mapPick?.filter((v) => !filter || v.category === filter) ?? null;
+  const pickLabel = () => {
+    const counts = new Map<string, number>();
+    for (const v of pickShown ?? []) {
+      if (v.location_tag) counts.set(v.location_tag, (counts.get(v.location_tag) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'here';
+  };
 
   // Chips under the results heading: most frequent hashtags in the results,
   // padded with slugs from the query itself.
@@ -322,6 +362,10 @@ export default function Feed() {
         </div>
         <SearchBar value={query} onChange={setQuery} onSearch={doSearch} trending={TRENDING} recent={recent} />
         <div style={S.navRight}>
+          <button className={isMap ? undefined : 'hs-map-btn'} style={S.mapBtn} onClick={goMap}>
+            <span style={{ fontSize: '15px', lineHeight: 1 }}>⌖</span>
+            <span>Map</span>
+          </button>
           <button style={S.savedBtn} onClick={goSaved}>
             <span style={S.savedHeart}>♥</span>
             <span>Saved</span>
@@ -375,6 +419,16 @@ export default function Feed() {
                   {h}
                 </button>
               ))}
+            </div>
+          </div>
+        )}
+
+        {isMap && (
+          <div style={S.resultsHead}>
+            <div style={S.eyebrow}>The city, mapped</div>
+            <h1 style={S.h1}>London hotspots</h1>
+            <div style={{ ...S.mastheadSub, marginTop: '8px' }}>
+              Where the reels cluster — tap a glow to browse that spot. Saved reels show as ♥ pins.
             </div>
           </div>
         )}
@@ -461,18 +515,45 @@ export default function Feed() {
           </div>
         )}
 
-        <div style={S.grid}>
-          {loading &&
-            Array.from({ length: 10 }, (_, i) => (
-              <div key={i}>
-                <div style={S.skThumb} />
-                <div style={S.skBar} />
-              </div>
+        {isMap ? (
+          <>
+            <MapView videos={geoVideos} savedIds={saved} onSelect={setMapPick} />
+            <div style={{ marginTop: '26px' }}>
+              {mapPick === null && (
+                <div style={S.mapHint}>Tap anywhere glowing to pull up the reels filmed there.</div>
+              )}
+              {mapPick !== null && pickShown && pickShown.length === 0 && (
+                <div style={S.mapHint}>Nothing filmed in this spot yet — try a brighter glow.</div>
+              )}
+              {pickShown && pickShown.length > 0 && (
+                <>
+                  <div style={S.eyebrow}>Around {pickLabel()}</div>
+                  <h2 style={S.h2}>
+                    {pickShown.length} reel{pickShown.length === 1 ? '' : 's'} in this spot
+                  </h2>
+                  <div style={S.grid}>
+                    {pickShown.map((v) => (
+                      <VideoCard key={v.id} video={v} hearted={!!saved[v.id]} onToggleHeart={toggleHeart} />
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </>
+        ) : (
+          <div style={S.grid}>
+            {loading &&
+              Array.from({ length: 10 }, (_, i) => (
+                <div key={i}>
+                  <div style={S.skThumb} />
+                  <div style={S.skBar} />
+                </div>
+              ))}
+            {shown.map((v) => (
+              <VideoCard key={v.id} video={v} hearted={!!saved[v.id]} onToggleHeart={toggleHeart} />
             ))}
-          {shown.map((v) => (
-            <VideoCard key={v.id} video={v} hearted={!!saved[v.id]} onToggleHeart={toggleHeart} />
-          ))}
-        </div>
+          </div>
+        )}
       </main>
 
       {authOpen && <AuthModal onClose={() => setAuthOpen(false)} />}

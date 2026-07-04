@@ -13,6 +13,10 @@
  * Usage:
  *   node scripts/ingest-youtube.js              # ingest
  *   node scripts/ingest-youtube.js --dry-run    # search + report, no writes
+ *   node scripts/ingest-youtube.js --only=mosque --cap=10
+ *     --only=<substr>  run only QUERIES whose q contains <substr>
+ *     --cap=<n>        stop after <n> new rows across all queries
+ *     --per=<n>        override MAX_PER_QUERY (new rows per query)
  *
  * Env (in .env.local at repo root — NEVER commit):
  *   VITE_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, YOUTUBE_API_KEY
@@ -34,8 +38,12 @@ const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const YT_KEY = process.env.YOUTUBE_API_KEY;
 const DRY_RUN = process.argv.includes("--dry-run");
+const ONLY = process.argv.find((a) => a.startsWith("--only="))?.slice("--only=".length).toLowerCase();
+const CAP = Number(process.argv.find((a) => a.startsWith("--cap="))?.slice("--cap=".length)) || Infinity;
 const BUCKET = "thumbnails";
-const MAX_PER_QUERY = 6; // keep quality manageable — skim the feed after a run
+const MAX_PER_QUERY =
+  Number(process.argv.find((a) => a.startsWith("--per="))?.slice("--per=".length)) ||
+  6; // keep quality manageable — skim the feed after a run
 const MAX_SECONDS = 90; // Shorts are <=60s; small margin for rounding
 
 if (!YT_KEY || (!DRY_RUN && (!SUPABASE_URL || !SERVICE_KEY))) {
@@ -58,6 +66,39 @@ const QUERIES = [
   { q: "battersea power station london #shorts", category: "thingstodo", location_tag: "battersea" },
   { q: "borough market london food #shorts", category: "food", location_tag: "borough market" },
   { q: "greenwich park london sunset view #shorts", category: "views", location_tag: "greenwich park" },
+  // Masjids / prayer rooms — baseTags backfill the hashtags column when the
+  // video itself carries none, so hashtag search still finds these rows.
+  {
+    q: "east london mosque whitechapel #shorts",
+    category: "culture",
+    location_tag: "whitechapel",
+    baseTags: ["#masjid", "#mosque", "#eastlondonmosque", "#london"],
+  },
+  {
+    q: "london central mosque regents park #shorts",
+    category: "culture",
+    location_tag: "regents park",
+    baseTags: ["#masjid", "#mosque", "#londoncentralmosque", "#london"],
+  },
+  {
+    q: "london mosque masjid prayer room tour #shorts",
+    category: "culture",
+    location_tag: "east london",
+    baseTags: ["#masjid", "#prayerroom", "#mosque", "#london"],
+  },
+  {
+    q: "dishoom london restaurant #shorts",
+    category: "food",
+    location_tag: "covent garden", // Dishoom's flagship site
+    baseTags: ["#dishoom", "#londonfood", "#indianfood", "#london"],
+    exclude: /manchester|birmingham|edinburgh/i, // Dishoom's non-London sites rank for this query
+  },
+  {
+    q: "broadway market hackney london street food #shorts",
+    category: "food",
+    location_tag: "broadway market",
+    baseTags: ["#broadwaymarket", "#streetfood", "#londonfood", "#london"],
+  },
 ];
 
 function isoDurationToSeconds(iso) {
@@ -83,12 +124,12 @@ async function ytApi(endpoint, params) {
 }
 
 /** Search one query and return candidate rows (already duration-filtered). */
-async function searchShorts({ q, category, location_tag }) {
+async function searchShorts({ q, category, location_tag, baseTags = [], exclude }) {
   const search = await ytApi("search", {
     part: "snippet",
     type: "video",
     videoDuration: "short", // <4 min; refined against MAX_SECONDS below
-    maxResults: "10",
+    maxResults: "25", // headroom over MAX_PER_QUERY — duration filter + dedupe eat into it
     regionCode: "GB",
     relevanceLanguage: "en",
     safeSearch: "moderate",
@@ -100,13 +141,14 @@ async function searchShorts({ q, category, location_tag }) {
   const details = await ytApi("videos", { part: "snippet,contentDetails", id: ids.join(",") });
   return details.items
     .filter((v) => isoDurationToSeconds(v.contentDetails.duration) <= MAX_SECONDS)
+    .filter((v) => !exclude || !exclude.test(`${v.snippet.title} ${v.snippet.description}`))
     .map((v) => ({
       platform: "youtube",
       original_url: `https://www.youtube.com/shorts/${v.id}`,
       embed_url: null,
       title: v.snippet.title,
       author: v.snippet.channelTitle,
-      hashtags: extractHashtags(v.snippet.title, v.snippet.description),
+      hashtags: [...new Set([...extractHashtags(v.snippet.title, v.snippet.description), ...baseTags])].slice(0, 8),
       category,
       location_tag,
       place_name: null,
@@ -155,7 +197,14 @@ async function main() {
     skipped = 0,
     failed = 0;
 
-  for (const query of QUERIES) {
+  const queries = ONLY ? QUERIES.filter((x) => x.q.toLowerCase().includes(ONLY)) : QUERIES;
+  if (queries.length === 0) {
+    console.error(`No queries match --only=${ONLY}`);
+    process.exit(1);
+  }
+
+  for (const query of queries) {
+    if (ok >= CAP) break;
     console.log(`⌕ "${query.q}" → ${query.category} / ${query.location_tag}`);
     let candidates;
     try {
@@ -168,7 +217,7 @@ async function main() {
 
     let taken = 0;
     for (const c of candidates) {
-      if (taken >= MAX_PER_QUERY) break;
+      if (taken >= MAX_PER_QUERY || ok >= CAP) break;
       if (existing.has(c.original_url) || seenThisRun.has(c.original_url)) {
         skipped++;
         continue;
