@@ -26,7 +26,7 @@ thumbnail_url text                   -- store in Supabase Storage, not hotlinked
 title         text
 author        text
 hashtags      text[]                 -- e.g. {'#southlondon','#goldenhour'}
-category      text check (category in ('food','views','nightlife','activities','culture'))
+category      text check (category in ('food','views','nightlife', 'thingstodo', 'culture'))
 location_tag  text                   -- 'south london', 'dalston', etc.
 created_at    timestamptz default now()
 -- geolocation columns (nice-to-have, for the map feature — all nullable):
