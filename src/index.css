@@ -70,3 +70,11 @@ button {
     transform: none;
   }
 }
+@keyframes hsShimmer {
+  0% {
+    background-position: 180% 0;
+  }
+  100% {
+    background-position: -80% 0;
+  }
+}

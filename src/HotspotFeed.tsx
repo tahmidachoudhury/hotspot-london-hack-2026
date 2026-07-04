@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
+  ASPECTS,
   PLATFORMS,
   RECENT,
   TONES,
@@ -65,11 +66,20 @@ export default function HotspotFeed({
   const [saved, setSaved] = useState<Record<string, boolean>>({ '2-0': true, '11-0': true, '5-1': true });
   const [feedCount, setFeedCount] = useState(26);
   const [width, setWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1400);
+  const [loading, setLoading] = useState(true);
 
   const screenRef = useRef(screen);
   const searchFocusedRef = useRef(searchFocused);
+  const loadTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   screenRef.current = screen;
   searchFocusedRef.current = searchFocused;
+
+  // Simulates a fetch delay so the skeleton grid has somewhere to live once a real DB call replaces buildFeed().
+  const scheduleLoad = useCallback((ms: number) => {
+    clearTimeout(loadTimeoutRef.current);
+    setLoading(true);
+    loadTimeoutRef.current = setTimeout(() => setLoading(false), ms);
+  }, []);
 
   useEffect(() => {
     const onScroll = () => {
@@ -82,9 +92,11 @@ export default function HotspotFeed({
     const onResize = () => setWidth(window.innerWidth);
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', onResize);
+    loadTimeoutRef.current = setTimeout(() => setLoading(false), 950);
     return () => {
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', onResize);
+      clearTimeout(loadTimeoutRef.current);
     };
   }, [feed.length]);
 
@@ -98,35 +110,39 @@ export default function HotspotFeed({
   }, []);
 
   const goFeed = useCallback(() => {
+    scheduleLoad(700);
     setScreen('feed');
     setSearchFocused(false);
     window.scrollTo({ top: 0 });
-  }, []);
+  }, [scheduleLoad]);
 
   const goSaved = useCallback(() => {
+    scheduleLoad(650);
     setScreen('saved');
     setSearchFocused(false);
     window.scrollTo({ top: 0 });
-  }, []);
+  }, [scheduleLoad]);
 
   const submit = useCallback(() => {
     const q = query.trim();
     if (!q) return;
+    scheduleLoad(850);
     setActiveQuery(q);
     setScreen('results');
     setSearchFocused(false);
     setFilter('All');
     window.scrollTo({ top: 0 });
-  }, [query]);
+  }, [query, scheduleLoad]);
 
   const pick = useCallback((t: string) => {
+    scheduleLoad(850);
     setQuery(t);
     setActiveQuery(t);
     setScreen('results');
     setSearchFocused(false);
     setFilter('All');
     window.scrollTo({ top: 0 });
-  }, []);
+  }, [scheduleLoad]);
 
   const p = pal(theme);
   const isFeed = screen === 'feed';
@@ -145,7 +161,7 @@ export default function HotspotFeed({
     base = feed.filter((it) => saved[it.uid]);
   }
 
-  const cards: CardView[] = base.map((it) => {
+  const cards: CardView[] = loading ? [] : base.map((it) => {
     const [c0, c1] = TONES[it.category];
     const isSavedItem = !!saved[it.uid];
     const plat = PLATFORMS[it.platform];
@@ -263,11 +279,24 @@ export default function HotspotFeed({
   const savedCount = Object.keys(saved).length;
   const hasSaved = savedCount > 0;
   const showChips = isFeed || isResults;
-  const showEmpty = isSaved && cards.length === 0;
-  const showLoading = isFeed && feedCount < feed.length;
+  const showEmpty = isSaved && !loading && cards.length === 0;
+  const showLoading = isFeed && !loading && feedCount < feed.length;
   const savedSubtitle = savedCount > 0 ? `${savedCount} reel${savedCount === 1 ? '' : 's'} saved for later` : 'Nothing saved yet';
 
   const cols = columns(width, density);
+
+  const skShimmerColor = theme === 'Midnight' ? 'rgba(255,255,255,.09)' : 'rgba(255,255,255,.6)';
+  const skBase: Style = {
+    position: 'relative',
+    borderRadius: '18px',
+    overflow: 'hidden',
+    background: theme === 'Midnight' ? 'rgba(255,255,255,.07)' : 'rgba(26,21,18,.07)',
+    backgroundImage: `linear-gradient(100deg, transparent 20%, ${theme === 'Midnight' ? 'rgba(255,255,255,.09)' : 'rgba(255,255,255,.55)'} 50%, transparent 80%)`,
+    backgroundSize: '220% 100%',
+    animation: 'hsShimmer 1.25s ease-in-out infinite',
+  };
+  const skels = ASPECTS.concat(ASPECTS).slice(0, Math.max(cols * 2, 10));
+  const skeletons = skels.map((aspect) => ({ thumbStyle: { ...skBase, aspectRatio: aspect } as Style }));
 
   const S: Record<string, Style> = {
     root: { minHeight: '100vh', background: p.bg, color: p.ink, fontFamily: "'Archivo',system-ui,sans-serif" },
@@ -392,6 +421,27 @@ export default function HotspotFeed({
     chipsRow: { display: 'flex', flexWrap: 'wrap', gap: '9px', margin: '0 0 22px' },
     grid: { columnCount: cols, columnGap: '18px' },
     card: { display: 'inline-block', width: '100%', breakInside: 'avoid', WebkitColumnBreakInside: 'avoid', marginBottom: '22px', cursor: 'pointer' },
+    skCard: { display: 'inline-block', width: '100%', breakInside: 'avoid', WebkitColumnBreakInside: 'avoid', marginBottom: '22px' },
+    skBar1: {
+      height: '12px',
+      width: '82%',
+      borderRadius: '6px',
+      marginTop: '11px',
+      background: p.chip,
+      backgroundImage: `linear-gradient(100deg, transparent 20%, ${skShimmerColor} 50%, transparent 80%)`,
+      backgroundSize: '220% 100%',
+      animation: 'hsShimmer 1.25s ease-in-out infinite',
+    },
+    skBar2: {
+      height: '10px',
+      width: '55%',
+      borderRadius: '6px',
+      marginTop: '7px',
+      background: p.chip,
+      backgroundImage: `linear-gradient(100deg, transparent 20%, ${skShimmerColor} 50%, transparent 80%)`,
+      backgroundSize: '220% 100%',
+      animation: 'hsShimmer 1.25s ease-in-out infinite',
+    },
     caption: { padding: '0 2px' },
     play: {
       position: 'absolute',
@@ -557,6 +607,14 @@ export default function HotspotFeed({
         )}
 
         <div style={S.grid}>
+          {loading &&
+            skeletons.map((sk, i) => (
+              <div key={i} style={S.skCard}>
+                <div style={sk.thumbStyle} />
+                <div style={S.skBar1} />
+                <div style={S.skBar2} />
+              </div>
+            ))}
           {cards.map((item) => (
             <div key={item.uid} className="hsc" onClick={item.onOpen} style={S.card}>
               <div className="hsc-thumb" style={item.thumbStyle}>
