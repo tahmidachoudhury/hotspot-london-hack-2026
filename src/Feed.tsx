@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import AuthModal from './AuthModal';
+import { signOut, useAuth } from './lib/auth';
+import { addSave, fetchSavedIds, removeSave } from './lib/saves';
 import { fetchAllVideos, searchVideos, searchWords } from './lib/videos';
 import { pal } from './palette';
 import SearchBar, { type TrendingItem } from './SearchBar';
@@ -8,7 +11,7 @@ import VideoCard, { ACCENT } from './VideoCard';
 const p = pal('Paper');
 
 type Style = CSSProperties & Record<string, unknown>;
-type Screen = 'feed' | 'results';
+type Screen = 'feed' | 'results' | 'saved';
 
 // Static until a trending_searches table exists — terms curated to hit the seeded rows.
 const TRENDING: TrendingItem[] = [
@@ -64,6 +67,64 @@ const S: Record<string, Style> = {
   },
   logo: { cursor: 'pointer', flex: 'none', font: "700 22px 'Oswald',sans-serif", letterSpacing: '1.5px', color: p.ink, userSelect: 'none' },
   logoDot: { color: ACCENT },
+  navRight: { flex: 'none', display: 'flex', alignItems: 'center', gap: '12px' },
+  savedBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '7px',
+    height: '40px',
+    padding: '0 15px',
+    borderRadius: '999px',
+    cursor: 'pointer',
+    border: '1px solid ' + p.line,
+    background: p.panel,
+    color: p.ink,
+    font: "600 13px 'Archivo',sans-serif",
+  },
+  savedHeart: { color: ACCENT, fontSize: '14px' },
+  savedCount: {
+    minWidth: '19px',
+    height: '19px',
+    padding: '0 5px',
+    borderRadius: '999px',
+    background: ACCENT,
+    color: '#fff',
+    font: "700 11px 'Archivo',sans-serif",
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatar: {
+    width: '40px',
+    height: '40px',
+    borderRadius: '50%',
+    border: 'none',
+    padding: 0,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    font: "700 13px 'Oswald',sans-serif",
+    letterSpacing: '.5px',
+    color: '#fff',
+    background: `linear-gradient(150deg,${ACCENT}, #7b4be0)`,
+  },
+  menu: {
+    position: 'absolute',
+    top: '48px',
+    right: 0,
+    zIndex: 60,
+    minWidth: '210px',
+    background: p.panel,
+    border: '1px solid ' + p.line,
+    borderRadius: '14px',
+    boxShadow: '0 26px 60px -20px rgba(20,10,20,.4)',
+    padding: '8px',
+    animation: 'hsFade .16s ease',
+  },
+  menuEmail: { font: "500 12.5px 'Archivo',sans-serif", color: p.mut, padding: '8px 10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  menuOut: { width: '100%', textAlign: 'left', padding: '9px 10px', borderRadius: '9px', border: 'none', cursor: 'pointer', background: 'none', color: p.ink, font: "600 13px 'Archivo',sans-serif" },
+  menuBackdrop: { position: 'fixed', inset: 0, zIndex: 40 },
   page: { maxWidth: '1560px', margin: '0 auto', padding: '26px clamp(16px,3vw,34px) 80px' },
   masthead: { display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: '14px', margin: '6px 0 22px' },
   resultsHead: { margin: '6px 0 18px' },
@@ -121,7 +182,10 @@ export default function Feed() {
   const [resultsError, setResultsError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Category | null>(null);
   const [recent, setRecent] = useState<string[]>(loadRecent);
-  const [hearted, setHearted] = useState<Record<string, boolean>>({});
+  const [saved, setSaved] = useState<Record<string, boolean>>({});
+  const [authOpen, setAuthOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const { user } = useAuth();
   const searchSeq = useRef(0);
 
   const loadFeed = useCallback(() => {
@@ -165,15 +229,68 @@ export default function Feed() {
     window.scrollTo({ top: 0 });
   }, []);
 
-  const toggleHeart = useCallback((id: string) => {
-    setHearted((h) => ({ ...h, [id]: !h[id] }));
+  const goSaved = useCallback(() => {
+    if (!user) {
+      setAuthOpen(true);
+      return;
+    }
+    searchSeq.current++;
+    setScreen('saved');
+    setFilter(null);
+    window.scrollTo({ top: 0 });
+  }, [user]);
+
+  // Load this user's saves whenever the session changes; clear them on sign-out.
+  useEffect(() => {
+    if (!user) {
+      setSaved({});
+      return;
+    }
+    fetchSavedIds()
+      .then((ids) => setSaved(Object.fromEntries([...ids].map((id) => [id, true]))))
+      .catch((e: Error) => console.warn('could not load saves:', e.message));
+  }, [user]);
+
+  const toggleHeart = useCallback(
+    (id: string) => {
+      if (!user) {
+        setAuthOpen(true);
+        return;
+      }
+      const on = !saved[id];
+      setSaved((s) => {
+        const n = { ...s };
+        if (on) n[id] = true;
+        else delete n[id];
+        return n;
+      });
+      // Optimistic — revert the heart if the write fails.
+      (on ? addSave(user.id, id) : removeSave(id)).catch((e: Error) => {
+        console.warn('save failed:', e.message);
+        setSaved((s) => {
+          const n = { ...s };
+          if (on) delete n[id];
+          else n[id] = true;
+          return n;
+        });
+      });
+    },
+    [user, saved],
+  );
+
+  const doSignOut = useCallback(() => {
+    setMenuOpen(false);
+    setScreen((s) => (s === 'saved' ? 'feed' : s));
+    signOut();
   }, []);
 
   const isResults = screen === 'results';
-  const source = isResults ? results : videos;
+  const isSaved = screen === 'saved';
+  const source = isResults ? results : isSaved ? videos && videos.filter((v) => saved[v.id]) : videos;
   const error = isResults ? resultsError : feedError;
   const loading = source === null && !error;
   const shown = source?.filter((v) => !filter || v.category === filter) ?? [];
+  const savedCount = Object.keys(saved).length;
 
   // Chips under the results heading: most frequent hashtags in the results,
   // padded with slugs from the query itself.
@@ -194,7 +311,8 @@ export default function Feed() {
   }, [isResults, results, activeQuery]);
 
   const emptyResults = isResults && results !== null && shown.length === 0;
-  const emptyFeed = !isResults && videos !== null && shown.length === 0;
+  const emptyFeed = screen === 'feed' && videos !== null && shown.length === 0;
+  const emptySaved = isSaved && !loading && shown.length === 0;
 
   return (
     <div style={S.root}>
@@ -203,10 +321,39 @@ export default function Feed() {
           HOT<span style={S.logoDot}>SPOT</span>
         </div>
         <SearchBar value={query} onChange={setQuery} onSearch={doSearch} trending={TRENDING} recent={recent} />
+        <div style={S.navRight}>
+          <button style={S.savedBtn} onClick={goSaved}>
+            <span style={S.savedHeart}>♥</span>
+            <span>Saved</span>
+            {savedCount > 0 && <span style={S.savedCount}>{savedCount}</span>}
+          </button>
+          {user ? (
+            <div style={{ position: 'relative' }}>
+              <button style={S.avatar} onClick={() => setMenuOpen((o) => !o)} aria-label="Account">
+                {(user.email ?? '??').slice(0, 2).toUpperCase()}
+              </button>
+              {menuOpen && (
+                <>
+                  <div style={S.menuBackdrop} onMouseDown={() => setMenuOpen(false)} />
+                  <div style={S.menu}>
+                    <div style={S.menuEmail}>{user.email}</div>
+                    <button className="hs-row" style={S.menuOut} onClick={doSignOut}>
+                      Sign out
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <button style={S.savedBtn} onClick={() => setAuthOpen(true)}>
+              Sign in
+            </button>
+          )}
+        </div>
       </nav>
 
       <main style={S.page}>
-        {!isResults && (
+        {screen === 'feed' && (
           <div style={S.masthead}>
             <div>
               <div style={S.eyebrow}>Live from the city</div>
@@ -232,6 +379,17 @@ export default function Feed() {
           </div>
         )}
 
+        {isSaved && (
+          <div style={S.resultsHead}>
+            <div style={S.eyebrow}>Your collection</div>
+            <h1 style={S.h1}>Saved spots</h1>
+            <div style={{ ...S.mastheadSub, marginTop: '8px' }}>
+              {savedCount > 0 ? `${savedCount} reel${savedCount === 1 ? '' : 's'} saved for later` : 'Nothing saved yet'}
+            </div>
+          </div>
+        )}
+
+        {!isSaved && (
         <div style={S.chipsRow}>
           {FILTERS.map(({ label, cat }) => {
             const active = filter === cat;
@@ -258,6 +416,7 @@ export default function Feed() {
             );
           })}
         </div>
+        )}
 
         {error && (
           <div style={S.stateWrap}>
@@ -291,6 +450,17 @@ export default function Feed() {
           </div>
         )}
 
+        {emptySaved && (
+          <div style={S.stateWrap}>
+            <div style={{ fontSize: '52px', color: p.faint, lineHeight: 1 }}>♡</div>
+            <div style={S.stateTitle}>Nothing saved yet</div>
+            <div style={S.stateText}>Tap the heart on any reel to keep it here for later.</div>
+            <button style={S.stateBtn} onClick={goFeed}>
+              Browse the feed
+            </button>
+          </div>
+        )}
+
         <div style={S.grid}>
           {loading &&
             Array.from({ length: 10 }, (_, i) => (
@@ -300,10 +470,12 @@ export default function Feed() {
               </div>
             ))}
           {shown.map((v) => (
-            <VideoCard key={v.id} video={v} hearted={!!hearted[v.id]} onToggleHeart={toggleHeart} />
+            <VideoCard key={v.id} video={v} hearted={!!saved[v.id]} onToggleHeart={toggleHeart} />
           ))}
         </div>
       </main>
+
+      {authOpen && <AuthModal onClose={() => setAuthOpen(false)} />}
     </div>
   );
 }
